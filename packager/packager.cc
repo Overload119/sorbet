@@ -1808,7 +1808,9 @@ vector<ast::ParsedFile> Packager::findPackages(core::GlobalState &gs, WorkerPool
         Timer timeit(gs.tracer(), "packager.findPackages");
         core::UnfreezeNameTable unfreeze(gs);
         core::packages::UnfreezePackages packages = gs.unfreezePackages();
-        for (auto &file : files) {
+        auto it = files.begin();
+        while (it != files.end()) {
+            auto &file = *it;
             if (FileOps::getFileName(file.file.data(gs).path()) == PACKAGE_FILE_NAME) {
                 if (file.file.data(gs).strictLevel == core::StrictLevel::Ignore) {
                     // if the `__package.rb` file is at `typed:
@@ -1817,6 +1819,7 @@ vector<ast::ParsedFile> Packager::findPackages(core::GlobalState &gs, WorkerPool
                     // actually work (since it all assumes we've got a
                     // file to actually analyze.) If we've got a
                     // `typed: ignore` package, then skip it.
+                    ++it;
                     continue;
                 }
 
@@ -1826,6 +1829,7 @@ vector<ast::ParsedFile> Packager::findPackages(core::GlobalState &gs, WorkerPool
                 if (pkg == nullptr) {
                     // There was an error creating a PackageInfoImpl for this file, and getPackageInfo has already
                     // surfaced that error to the user. Nothing to do here.
+                    ++it;
                     continue;
                 }
                 auto &prevPkg = gs.packageDB().getPackageInfo(pkg->mangledName());
@@ -1838,7 +1842,20 @@ vector<ast::ParsedFile> Packager::findPackages(core::GlobalState &gs, WorkerPool
                 } else {
                     packages.db.enterPackage(move(pkg));
                 }
+
+                if (gs.runningUnderAutogen) {
+                    // Remove package files when running under autogen, as we don't
+                    // rewrite the ASTs for them in that case. If we don't do this,
+                    // it causes namer errors in package files.
+                    it = files.erase(it);
+                } else {
+                    ++it;
+                }
+
+                continue;
             }
+
+            ++it;
         }
     }
 
@@ -1850,51 +1867,53 @@ vector<ast::ParsedFile> Packager::run(core::GlobalState &gs, WorkerPool &workers
 
     files = findPackages(gs, workers, std::move(files));
 
-    // Step 2:
-    // * Find package files and rewrite them into virtual AST mappings.
-    // * Find files within each package and rewrite each to be wrapped by their virtual package namespace.
-    {
-        Timer timeit(gs.tracer(), "packager.rewritePackagesAndFiles");
-
-        auto resultq = make_shared<BlockingBoundedQueue<vector<ast::ParsedFile>>>(files.size());
-        auto fileq = make_shared<ConcurrentBoundedQueue<ast::ParsedFile>>(files.size());
-        for (auto &file : files) {
-            fileq->push(move(file), 1);
-        }
-
-        workers.multiplexJob("rewritePackagesAndFiles", [&gs, fileq, resultq]() {
-            Timer timeit(gs.tracer(), "packager.rewritePackagesAndFilesWorker");
-            vector<ast::ParsedFile> results;
-            uint32_t filesProcessed = 0;
-            ast::ParsedFile job;
-            for (auto result = fileq->try_pop(job); !result.done(); result = fileq->try_pop(job)) {
-                if (result.gotItem()) {
-                    filesProcessed++;
-                    auto &file = job.file.data(gs);
-                    core::Context ctx(gs, core::Symbols::root(), job.file);
-
-                    if (file.sourceType == core::File::Type::Normal) {
-                        job = rewritePackagedFile(ctx, move(job));
-                    } else if (file.sourceType == core::File::Type::Package) {
-                        job = rewritePackage(ctx, move(job));
-                    }
-                    results.emplace_back(move(job));
-                }
-            }
-            if (filesProcessed > 0) {
-                resultq->push(move(results), filesProcessed);
-            }
-        });
-        files.clear();
-
+    if (!gs.runningUnderAutogen) {
+        // Step 2:
+        // * Find package files and rewrite them into virtual AST mappings.
+        // * Find files within each package and rewrite each to be wrapped by their virtual package namespace.
         {
-            vector<ast::ParsedFile> threadResult;
-            for (auto result = resultq->wait_pop_timed(threadResult, WorkerPool::BLOCK_INTERVAL(), gs.tracer());
-                 !result.done();
-                 result = resultq->wait_pop_timed(threadResult, WorkerPool::BLOCK_INTERVAL(), gs.tracer())) {
-                if (result.gotItem()) {
-                    files.insert(files.end(), make_move_iterator(threadResult.begin()),
-                                 make_move_iterator(threadResult.end()));
+            Timer timeit(gs.tracer(), "packager.rewritePackagesAndFiles");
+
+            auto resultq = make_shared<BlockingBoundedQueue<vector<ast::ParsedFile>>>(files.size());
+            auto fileq = make_shared<ConcurrentBoundedQueue<ast::ParsedFile>>(files.size());
+            for (auto &file : files) {
+                fileq->push(move(file), 1);
+            }
+
+            workers.multiplexJob("rewritePackagesAndFiles", [&gs, fileq, resultq]() {
+                Timer timeit(gs.tracer(), "packager.rewritePackagesAndFilesWorker");
+                vector<ast::ParsedFile> results;
+                uint32_t filesProcessed = 0;
+                ast::ParsedFile job;
+                for (auto result = fileq->try_pop(job); !result.done(); result = fileq->try_pop(job)) {
+                    if (result.gotItem()) {
+                        filesProcessed++;
+                        auto &file = job.file.data(gs);
+                        core::Context ctx(gs, core::Symbols::root(), job.file);
+
+                        if (file.sourceType == core::File::Type::Normal) {
+                            job = rewritePackagedFile(ctx, move(job));
+                        } else if (file.sourceType == core::File::Type::Package) {
+                            job = rewritePackage(ctx, move(job));
+                        }
+                        results.emplace_back(move(job));
+                    }
+                }
+                if (filesProcessed > 0) {
+                    resultq->push(move(results), filesProcessed);
+                }
+            });
+            files.clear();
+
+            {
+                vector<ast::ParsedFile> threadResult;
+                for (auto result = resultq->wait_pop_timed(threadResult, WorkerPool::BLOCK_INTERVAL(), gs.tracer());
+                     !result.done();
+                     result = resultq->wait_pop_timed(threadResult, WorkerPool::BLOCK_INTERVAL(), gs.tracer())) {
+                    if (result.gotItem()) {
+                        files.insert(files.end(), make_move_iterator(threadResult.begin()),
+                                     make_move_iterator(threadResult.end()));
+                    }
                 }
             }
         }

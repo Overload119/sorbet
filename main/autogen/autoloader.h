@@ -40,6 +40,7 @@ struct AutoloaderConfig {
     std::vector<std::string> absoluteIgnorePatterns;
     std::vector<std::string> relativeIgnorePatterns;
     std::vector<std::string> stripPrefixes;
+    std::vector<std::string> packagedShimPaths;
     bool packagedAutoloader = false;
 
     AutoloaderConfig() = default;

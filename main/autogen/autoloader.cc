@@ -71,6 +71,7 @@ AutoloaderConfig AutoloaderConfig::enterConfig(core::GlobalState &gs, const real
     out.relativeIgnorePatterns = cfg.relativeIgnorePatterns;
     out.stripPrefixes = cfg.stripPrefixes;
     out.packagedAutoloader = cfg.packagedAutoloader;
+    out.packagedShimPaths = cfg.packagedShimPaths;
     return out;
 }
 
@@ -221,6 +222,25 @@ string DefTree::renderAutoloadSrc(const core::GlobalState &gs, const AutoloaderC
                                children.at(pair.first)->path(gs));
             }
             fmt::format_to(std::back_inserter(buf), "}})\n", fullName);
+        }
+
+        if (!alCfg.packagedShimPaths.empty() && gs.packageDB().isPackage(qname.nameParts)) {
+            const bool isAutogenPackage =
+                (qname.nameParts.size() == 2 && qname.nameParts[0] == core::Names::Constants::Opus() &&
+                 qname.nameParts[1] == core::Names::Constants::Autogen());
+
+            if (!isAutogenPackage) {
+                string mungedFullName = fmt::format(
+                    "{}", fmt::map_join(qname.nameParts, "_", [&](const auto &nr) -> string { return nr.show(gs); }));
+
+                // Special case in Stripe codebase -- we use a special API called ".shimmed_autoload"
+                // which only creates an autoload if the target file exists.
+                for (auto &shimPath : alCfg.packagedShimPaths) {
+                    fmt::format_to(std::back_inserter(buf),
+                                   "\n{}.shimmed_autoload({}, :Autogen, '{}/{}/autoloader_shims.rb')",
+                                   alCfg.registryModule, fullName, shimPath, mungedFullName);
+                }
+            }
         }
     } else if (type == Definition::Type::Casgn || type == Definition::Type::Alias ||
                type == Definition::Type::TypeAlias) {

@@ -25,6 +25,7 @@ public:
     NameRef enterPackage(std::unique_ptr<PackageInfo> pkg);
     NameRef lookupPackage(NameRef pkgMangledName) const;
 
+    bool isPackage(const std::vector<core::NameRef> &nameParts) const;
     const PackageInfo &getPackageForFile(const core::GlobalState &gs, core::FileRef file) const;
     const PackageInfo &getPackageInfo(core::NameRef mangledName) const;
 
