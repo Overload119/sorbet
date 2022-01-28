@@ -131,6 +131,22 @@ NameRef PackageDB::lookupPackage(NameRef pkgMangledName) const {
     return it->first;
 }
 
+bool PackageDB::isPackage(const std::vector<core::NameRef> &nameParts) const {
+    if (mangledNames.empty()) {
+        return false;
+    }
+
+    // TODO (aadi-stripe) Could not make this work with std::binary_search, giving
+    // differently typed args in the comp function. Investigate why.
+    auto lb = std::lower_bound(
+        mangledNames.begin(), mangledNames.end(), nameParts, [this](auto pkgMangledName, auto &nameParts) -> bool {
+            return core::packages::PackageInfo::lexCmp(getPackageInfo(pkgMangledName).fullName(), nameParts);
+        });
+
+    return lb != mangledNames.end() &&
+           !(core::packages::PackageInfo::lexCmp(nameParts, getPackageInfo(*(mangledNames.begin())).fullName()));
+}
+
 const PackageInfo &PackageDB::getPackageForFile(const core::GlobalState &gs, core::FileRef file) const {
     ENFORCE(frozen);
     auto &fileData = file.data(gs);
