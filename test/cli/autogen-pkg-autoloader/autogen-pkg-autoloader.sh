@@ -21,6 +21,7 @@ mkdir output
   --autogen-autoloader-exclude-require=byebug \
   --autogen-autoloader-ignore=scripts/ \
   --autogen-autoloader-preamble "$preamble" \
+  --autogen-autoloader-packaged-shim-paths shimpath \
   test/cli/autogen-pkg-autoloader/{foo,bar,bar2,errors,__package}.rb \
   test/cli/autogen-pkg-autoloader/scripts/baz.rb 2>&1
 
