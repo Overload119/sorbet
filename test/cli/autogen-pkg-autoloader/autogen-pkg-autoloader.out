@@ -14,6 +14,7 @@ Opus::Require.autoload_map(RootPackage, {
   Yabba: "autoloader/RootPackage/Yabba.rb",
 })
 
+Opus::Require.shimmed_autoload(RootPackage, :Autogen, 'shimpath/RootPackage/autoloader_shims.rb')
 --- output/RootPackage/Foo.rb
 # frozen_string_literal: true
 # typed: true
